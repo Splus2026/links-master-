@@ -59,6 +59,21 @@ def open_path(path):
         subprocess.Popen(['xdg-open', path])
 
 
+def color_button(parent, text, command, bg, bold=False, big=False):
+    """Цветная кнопка (у стандартных ttk-кнопок в Windows цвет не меняется)."""
+    size = FONT_SIZE + (3 if big else 0)
+    return tk.Button(parent, text=text, command=command, bg=bg, fg='white',
+                     activebackground=bg, activeforeground='white', disabledforeground='#d0d0d0',
+                     font=('Segoe UI', size, 'bold' if bold else 'normal'),
+                     relief='flat', cursor='hand2', padx=12, pady=4)
+
+
+def short_url(url, limit=58):
+    """Короткий вид ссылки для списка баз: без http(s)://, длинная — с «…» в середине."""
+    u = url.split('://', 1)[-1]
+    return u if len(u) <= limit else u[:limit - 22] + '…' + u[-21:]
+
+
 def setup_logger():
     DOWNLOADS.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger('links_loader')
@@ -103,14 +118,6 @@ class App:
 
     def _build_ui(self):
         pad = {'padx': 8, 'pady': 4}
-        top = ttk.Frame(self.root)
-        top.pack(fill='x', **pad)
-        ttk.Label(top, text='Файл ссылок:').pack(side='left')
-        ttk.Entry(top, textvariable=self.ini_path).pack(side='left', fill='x', expand=True, padx=6)
-        ttk.Button(top, text='Обзор…', command=self.browse_ini).pack(side='left')
-        ttk.Button(top, text='📄 Из Word…', command=self.browse_word).pack(side='left', padx=(6, 0))
-        ttk.Button(top, text='Перечитать', command=self.load_ini).pack(side='left', padx=(6, 0))
-
         mid = ttk.Frame(self.root)
         mid.pack(fill='x', **pad)
 
@@ -119,7 +126,7 @@ class App:
         lst.pack(side='left', fill='y')
         holder = ttk.Frame(lst)
         holder.pack(fill='both', expand=True, padx=4, pady=4)
-        self.canvas = tk.Canvas(holder, height=260, width=360, highlightthickness=0)
+        self.canvas = tk.Canvas(holder, height=300, width=430, highlightthickness=0)
         sb = ttk.Scrollbar(holder, orient='vertical', command=self.canvas.yview)
         self.check_frame = ttk.Frame(self.canvas)
         self.check_frame.bind('<Configure>',
@@ -128,18 +135,24 @@ class App:
         self.canvas.configure(yscrollcommand=sb.set)
         self.canvas.pack(side='left', fill='both', expand=True)
         sb.pack(side='right', fill='y')
-        self.canvas.bind('<Enter>', lambda e: self.canvas.bind_all('<MouseWheel>', self._on_wheel))
-        self.canvas.bind('<Leave>', lambda e: self.canvas.unbind_all('<MouseWheel>'))
+        self.root.bind_all('<MouseWheel>', self._on_wheel)
         btns = ttk.Frame(lst)
         btns.pack(fill='x', padx=4, pady=(0, 4))
-        ttk.Button(btns, text='Отметить все', command=lambda: self.set_all(True)).pack(side='left')
-        ttk.Button(btns, text='Снять все', command=lambda: self.set_all(False)).pack(side='left', padx=6)
+        color_button(btns, '✔  Отметить все', lambda: self.set_all(True), '#2f6fb0').pack(side='left')
+        color_button(btns, '✖  Снять все', lambda: self.set_all(False), '#8a7a6a').pack(side='left', padx=6)
         self.count_label = ttk.Label(lst, text='')
         self.count_label.pack(anchor='w', padx=6, pady=(0, 4))
 
         # центр: большая кнопка «Ссылки для загрузки» и таймер
         center = ttk.Frame(mid)
         center.pack(side='left', fill='both', expand=True, padx=8)
+        ttk.Label(center, text='Файл ссылок:').pack(anchor='w', pady=(6, 0))
+        filerow = ttk.Frame(center)
+        filerow.pack(fill='x')
+        ttk.Entry(filerow, textvariable=self.ini_path, state='readonly').pack(
+            side='left', fill='x', expand=True, ipady=3)
+        color_button(filerow, '📂  Открыть файл ссылок…', self.browse_ini, '#1f6f8a').pack(
+            side='left', padx=(6, 0))
         self.btn_links = tk.Button(center, text='📝  Ссылки для загрузки',
                                    font=('Segoe UI', FONT_SIZE + 6, 'bold'), bg='#1f8a8a', fg='white',
                                    activebackground='#176c6c', activeforeground='white',
@@ -163,14 +176,15 @@ class App:
         ttk.Checkbutton(opt, text='Пропускать уже скачанное',
                         variable=self.opt_skip).pack(anchor='w', padx=8, pady=2)
         ttk.Separator(opt).pack(fill='x', padx=8, pady=10)
-        self.btn_start = ttk.Button(opt, text='▶  Старт', command=self.start)
-        self.btn_start.pack(fill='x', padx=8, pady=2)
-        self.btn_stop = ttk.Button(opt, text='■  Стоп', command=self.stop, state='disabled')
+        self.btn_start = color_button(opt, '▶  Старт', self.start, '#2e8b57', bold=True, big=True)
+        self.btn_start.pack(fill='x', padx=8, pady=2, ipady=4)
+        self.btn_stop = color_button(opt, '■  Стоп', self.stop, '#c0392b')
+        self.btn_stop.config(state='disabled')
         self.btn_stop.pack(fill='x', padx=8, pady=2)
-        ttk.Button(opt, text='Открыть папку downloads',
-                   command=lambda: self.open_folder()).pack(fill='x', padx=8, pady=(10, 2))
-        ttk.Button(opt, text='Открыть лог',
-                   command=lambda: LOG_FILE.exists() and open_path(LOG_FILE)).pack(fill='x', padx=8, pady=2)
+        color_button(opt, '📁  Открыть папку downloads', lambda: self.open_folder(),
+                     '#5b7f95').pack(fill='x', padx=8, pady=(10, 2))
+        color_button(opt, '📄  Открыть лог', lambda: LOG_FILE.exists() and open_path(LOG_FILE),
+                     '#6c7a89').pack(fill='x', padx=8, pady=2)
 
         # прогресс
         prog = ttk.Frame(self.root)
@@ -217,12 +231,14 @@ class App:
         return lbl
 
     def _on_wheel(self, event):
-        self.canvas.yview_scroll(int(-event.delta / 120), 'units')
+        # крутим список баз, только если мышь над ним
+        if str(event.widget).startswith(str(self.canvas)):
+            self.canvas.yview_scroll(int(-event.delta / 120), 'units')
 
     # ------------------------------------------------------------ разделы
 
     def browse_ini(self):
-        path = filedialog.askopenfilename(title='Файл ссылок', initialdir=str(APP_DIR),
+        path = filedialog.askopenfilename(title='Открыть файл ссылок', initialdir=str(APP_DIR),
                                           filetypes=[('Список ссылок (ini, txt, Word)', '*.ini *.txt *.docx'), ('Документ Word', '*.docx'), ('Все файлы', '*.*')])
         if path:
             self.ini_path.set(path)
@@ -267,23 +283,13 @@ class App:
                     var.set(True)
             self.status.config(text='Список ссылок обновлён.')
 
-    def browse_word(self):
-        path = filedialog.askopenfilename(title='Список ссылок в Word', initialdir=str(APP_DIR),
-                                          filetypes=[('Документ Word', '*.docx'), ('Все файлы', '*.*')])
-        if path:
-            self.ini_path.set(path)
-            self.load_ini()
-            self.set_all(True)
-            self.status.config(text=f'Загружено из Word: {len(self.sections)} баз, '
-                                    f'{sum(len(s.urls) for s in self.sections)} ссылок.')
-
     def load_ini(self):
         self.btn_links.config(text=f'📝  Ссылки для загрузки\n(открыть {Path(self.ini_path.get()).name})')
         try:
             self.ini_mtime = Path(self.ini_path.get()).stat().st_mtime
         except OSError:
             self.ini_mtime = None
-        if self.sections:   # при «Перечитать» сохраняем текущие галочки
+        if self.sections:   # при обновлении списка сохраняем текущие галочки
             self._saved_checked = {s.name for s, v in zip(self.sections, self.section_vars) if v.get()}
         for w in self.check_frame.winfo_children():
             w.destroy()
@@ -302,8 +308,13 @@ class App:
             var = tk.BooleanVar(value=sec.name in self._saved_checked)
             var.trace_add('write', lambda *a: self._update_count())
             n = len(sec.urls)
-            ttk.Checkbutton(self.check_frame, text=f'{sec.name}   ({n} ссыл.)',
-                            variable=var).pack(anchor='w', padx=4, pady=1)
+            ttk.Checkbutton(self.check_frame, text=f'{sec.name}   ({n})',
+                            variable=var).pack(anchor='w', padx=4, pady=(6, 0))
+            for url in sec.urls:
+                lbl = tk.Label(self.check_frame, text=short_url(url), fg='#5a7a8a', cursor='hand2',
+                               font=('Segoe UI', max(FONT_SIZE - 3, 8)))
+                lbl.pack(anchor='w', padx=(30, 4))
+                lbl.bind('<Button-1>', lambda e, u=url: webbrowser.open(u))
             self.section_vars.append(var)
         self._update_count()
 
