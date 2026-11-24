@@ -42,7 +42,7 @@ from loader.common import Cancelled, safe_name
 from loader.http_utils import make_session
 from loader.ini_parser import Section, parse_links_file
 from loader.postprocess import convert_docs, unpack_section
-from loader.report import write_links_view, write_report
+from loader.report import write_report
 from loader.sources import Context, process_url
 
 STATUS_TEXT = {'ok': '✔ загружено', 'skip': '• уже было', 'fail': '✖ не удалось',
@@ -66,6 +66,28 @@ def color_button(parent, text, command, bg, bold=False, big=False):
                      activebackground=bg, activeforeground='white', disabledforeground='#d0d0d0',
                      font=('Segoe UI', size, 'bold' if bold else 'normal'),
                      relief='flat', cursor='hand2', padx=12, pady=4)
+
+
+def make_check_images(size):
+    """Рисует квадратики галочек: пустой и отмеченный (зелёный с белой галкой)."""
+    def blank(fill, border):
+        img = tk.PhotoImage(width=size, height=size)
+        img.put(border, to=(0, 0, size, size))
+        img.put(fill, to=(2, 2, size - 2, size - 2))
+        return img
+
+    off = blank('#ffffff', '#5b7f95')
+    on = blank('#2e8b57', '#24714a')
+    pts = [(0.22, 0.52), (0.42, 0.72), (0.78, 0.30)]
+    w = max(2, size // 9)
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+        steps = size * 2
+        for i in range(steps + 1):
+            t = i / steps
+            x = int((x1 + (x2 - x1) * t) * size)
+            y = int((y1 + (y2 - y1) * t) * size)
+            on.put('#ffffff', to=(x - w // 2, y - w // 2, x - w // 2 + w, y - w // 2 + w))
+    return off, on
 
 
 def short_url(url, limit=58):
@@ -112,6 +134,8 @@ class App:
         root.title('Загрузчик файлов по списку ссылок')
         root.geometry('1450x940')
         root.minsize(1200, 760)
+        self.box_big = make_check_images(FONT_SIZE + 10)
+        self.box_small = make_check_images(FONT_SIZE + 4)
         self._build_ui()
         self.load_ini()
         root.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -146,7 +170,7 @@ class App:
         self.count_label = ttk.Label(lst, text='')
         self.count_label.pack(anchor='w', padx=6, pady=(0, 4))
 
-        # центр: файл ссылок, «Редактор файла ссылок», «Просмотр» и таймер
+        # центр: файл ссылок, «Редактор файла ссылок» и таймер
         center = ttk.Frame(mid)
         center.pack(side='left', fill='both', expand=True, padx=8)
         ttk.Label(center, text='Файл ссылок:').pack(anchor='w', pady=(6, 0))
@@ -161,8 +185,6 @@ class App:
                                    activebackground='#176c6c', activeforeground='white',
                                    relief='flat', cursor='hand2', command=self.edit_ini)
         self.btn_links.pack(fill='x', pady=(10, 4), ipady=14)
-        color_button(center, '👁  Просмотр файла ссылок', self.view_links, '#5b7f95').pack(
-            fill='x', pady=(2, 0), ipady=3)
         self.timer_label = tk.Label(center, text='00:00', font=('Consolas', 56, 'bold'), fg='#1f6f8a')
         self.timer_label.pack(pady=(14, 0))
         ttk.Label(center, text='время загрузки', foreground='#5a6b6b').pack()
@@ -170,14 +192,11 @@ class App:
         # настройки и кнопки
         opt = ttk.LabelFrame(mid, text='Настройки')
         opt.pack(side='left', fill='y', padx=(8, 0))
-        ttk.Checkbutton(opt, text='Распаковать архивы (ZIP, RAR, 7Z)',
-                        variable=self.opt_unpack).pack(anchor='w', padx=8, pady=(6, 2))
-        ttk.Checkbutton(opt, text='Преобразовать DOC в DOCX',
-                        variable=self.opt_convert).pack(anchor='w', padx=8, pady=2)
-        ttk.Checkbutton(opt, text='Удалять архив после успешной распаковки',
-                        variable=self.opt_delete).pack(anchor='w', padx=8, pady=2)
-        ttk.Checkbutton(opt, text='Пропускать уже скачанное',
-                        variable=self.opt_skip).pack(anchor='w', padx=8, pady=2)
+        for text, var in (('Распаковать архивы (ZIP, RAR, 7Z)', self.opt_unpack),
+                          ('Преобразовать DOC в DOCX', self.opt_convert),
+                          ('Удалять архив после успешной распаковки', self.opt_delete),
+                          ('Пропускать уже скачанное', self.opt_skip)):
+            self.check(opt, text, var).pack(anchor='w', padx=6, pady=2)
         ttk.Separator(opt).pack(fill='x', padx=8, pady=10)
         self.btn_start = color_button(opt, '▶  Старт', self.start, '#2e8b57', bold=True, big=True)
         self.btn_start.pack(fill='x', padx=8, pady=2, ipady=4)
@@ -185,7 +204,7 @@ class App:
         self.btn_stop.config(state='disabled')
         self.btn_stop.pack(fill='x', padx=8, pady=2)
         color_button(opt, '📁  Открыть папку downloads', lambda: self.open_folder(),
-                     '#5b7f95').pack(fill='x', padx=8, pady=(10, 2))
+                     '#2e8b57').pack(fill='x', padx=8, pady=(10, 2))
         color_button(opt, '📄  Открыть лог', lambda: LOG_FILE.exists() and open_path(LOG_FILE),
                      '#6c7a89').pack(fill='x', padx=8, pady=2)
 
@@ -226,6 +245,18 @@ class App:
                                            lambda e: self.open_folder())
         self.link_report = self._make_link(self.summary, '🌐  Страница со ссылками для ручной загрузки',
                                            lambda e: REPORT_FILE.exists() and webbrowser.open(REPORT_FILE.as_uri()))
+
+    def check(self, parent, text, variable, font=None, fg='black', small=False):
+        """Галочка с крупным квадратиком (стандартный в Windows слишком мелкий)."""
+        off, on = self.box_small if small else self.box_big
+        cb = tk.Checkbutton(parent, text=text, variable=variable, image=off, selectimage=on,
+                            compound='left', indicatoron=False, relief='flat', offrelief='flat',
+                            overrelief='flat', bd=0, highlightthickness=0, padx=4, pady=1,
+                            anchor='w', cursor='hand2', fg=fg,
+                            font=font or ('Segoe UI', FONT_SIZE))
+        bg = cb.cget('bg')
+        cb.config(selectcolor=bg, activebackground=bg)
+        return cb
 
     def _make_link(self, parent, text, callback):
         lbl = tk.Label(parent, text=text, fg='#14607a', cursor='hand2',
@@ -310,15 +341,15 @@ class App:
         for i, sec in enumerate(self.sections):
             on = sec.name in self._saved_checked
             var = tk.BooleanVar(value=on)
-            ttk.Checkbutton(self.check_frame, text=f'{sec.name}   ({len(sec.urls)})',
-                            variable=var, style='Base.TCheckbutton').pack(anchor='w', padx=4, pady=(8, 0))
+            self.check(self.check_frame, f'{sec.name}   ({len(sec.urls)})', var,
+                       font=('Segoe UI', FONT_SIZE, 'bold')).pack(anchor='w', padx=2, pady=(8, 0))
             lvars = []
             for url in sec.urls:
                 lv = tk.BooleanVar(value=on and url not in self._saved_unchecked_links)
                 row = tk.Frame(self.check_frame)
                 row.pack(anchor='w', padx=(30, 4))
-                tk.Checkbutton(row, text=short_url(url), variable=lv, font=link_font,
-                               fg='#3f6070', anchor='w').pack(side='left')
+                self.check(row, short_url(url), lv, font=link_font, fg='#3f6070',
+                           small=True).pack(side='left')
                 go = tk.Label(row, text='↗', fg='#1f6f8a', cursor='hand2', font=link_font)
                 go.pack(side='left', padx=(4, 0))
                 go.bind('<Button-1>', lambda e, u=url: webbrowser.open(u))
@@ -371,16 +402,6 @@ class App:
     def set_all(self, value):
         for v in self.section_vars:
             v.set(value)
-
-    def view_links(self):
-        """Просмотр всех баз и ссылок файла в браузере (ссылки кликабельны)."""
-        if not self.sections:
-            messagebox.showinfo('Нет ссылок', 'Сначала выберите файл ссылок.')
-            return
-        DOWNLOADS.mkdir(parents=True, exist_ok=True)
-        page = write_links_view(DOWNLOADS / 'просмотр_ссылок.html', self.sections,
-                                Path(self.ini_path.get()).name)
-        webbrowser.open(page.as_uri())
 
     def open_folder(self):
         DOWNLOADS.mkdir(parents=True, exist_ok=True)
@@ -581,7 +602,6 @@ def main():
     style.configure('Treeview.Heading', font=('Segoe UI', FONT_SIZE, 'bold'))
     style.configure('TLabelframe.Label', font=('Segoe UI', FONT_SIZE, 'bold'))
     style.configure('TButton', padding=(10, 5))
-    style.configure('Base.TCheckbutton', font=('Segoe UI', FONT_SIZE, 'bold'))
     App(root)
     root.mainloop()
 
