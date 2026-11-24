@@ -1,0 +1,73 @@
+# Сборка links_loader.exe для Windows.
+#  • Публикация релиза на GitHub  → сборка + ZIP прикрепляется к релизу.
+#  • Вкладка Actions → «Run workflow» → пробная сборка (ZIP в «Artifacts»).
+name: Сборка exe
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # нужно, чтобы прикрепить файл к релизу
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Установить Python (с кэшем pip)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Кэш PyInstaller
+        uses: actions/cache@v4
+        with:
+          path: |
+            build
+            ~\AppData\Local\pyinstaller
+          key: pyinstaller-${{ runner.os }}-${{ hashFiles('requirements.txt', '**/*.py') }}
+          restore-keys: pyinstaller-${{ runner.os }}-
+
+      - name: Установить библиотеки
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Собрать exe
+        run: >
+          pyinstaller links_loader.py
+          --name links_loader
+          --onedir
+          --windowed
+          --noconfirm
+          --collect-submodules loader
+          --hidden-import win32com.client
+          --hidden-import pythoncom
+
+      - name: Упаковать в ZIP
+        shell: pwsh
+        run: |
+          $ver = if ("${{ github.event.release.tag_name }}") { "${{ github.event.release.tag_name }}" } else { "test" }
+          Copy-Item links.ini, README.md dist\links_loader\
+          $zip = "links_loader-$ver-windows.zip"
+          Compress-Archive -Path dist\links_loader -DestinationPath $zip
+          "ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Прикрепить к релизу
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP }}
+
+      - name: Сохранить пробную сборку
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: links_loader-windows
+          path: ${{ env.ZIP }}
