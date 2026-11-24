@@ -1,19 +1,29 @@
-
 # Сборка links_loader.exe для Windows.
-#  • Публикация релиза на GitHub  → сборка + ZIP прикрепляется к релизу.
-#  • Вкладка Actions → «Run workflow» → пробная сборка (ZIP в «Artifacts»).
+#  • Любое изменение кода в main → сборка обновляет релиз «latest»
+#    (всегда одна, последняя сборка: links_loader-windows.zip).
+#  • Публикация релиза с тегом (v1.2.0 и т.п.) → отдельный ZIP с номером версии.
+#  • Вкладка Actions → «Run workflow» → то же, что при изменении кода.
 name: Сборка exe
 
 on:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md', 'links.ini', '.gitignore']
   release:
     types: [published]
   workflow_dispatch:
 
 permissions:
-  contents: write   # нужно, чтобы прикрепить файл к релизу
+  contents: write   # нужно, чтобы создавать и обновлять релиз
+
+concurrency:        # если код загрузили ещё раз, прежняя сборка отменяется
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    # не собирать дважды: релиз «latest» сам создаётся этим же файлом
+    if: github.event_name != 'release' || github.event.release.tag_name != 'latest'
     runs-on: windows-latest
     steps:
       - name: Получить код
@@ -54,21 +64,36 @@ jobs:
       - name: Упаковать в ZIP
         shell: pwsh
         run: |
-          $ver = if ("${{ github.event.release.tag_name }}") { "${{ github.event.release.tag_name }}" } else { "test" }
           Copy-Item links.ini, README.md dist\links_loader\
-          $zip = "links_loader-$ver-windows.zip"
+          if ("${{ github.event_name }}" -eq "release") {
+            $zip = "links_loader-${{ github.event.release.tag_name }}-windows.zip"
+          } else {
+            $zip = "links_loader-windows.zip"
+          }
           Compress-Archive -Path dist\links_loader -DestinationPath $zip
           "ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Прикрепить к релизу
+      - name: Сдвинуть тег latest на свежий код
+        if: github.event_name != 'release'
+        shell: bash
+        run: |
+          git tag -f latest
+          git push -f origin latest
+
+      - name: Обновить релиз «latest»
+        if: github.event_name != 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Последняя сборка
+          body: |
+            Автоматическая сборка из последней версии кода (${{ github.sha }}).
+            Скачайте links_loader-windows.zip, распакуйте и запустите links_loader.exe.
+          files: ${{ env.ZIP }}
+          make_latest: true
+
+      - name: Прикрепить к релизу с версией
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ZIP }}
-
-      - name: Сохранить пробную сборку
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: links_loader-windows
-          path: ${{ env.ZIP }}
