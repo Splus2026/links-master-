@@ -60,6 +60,8 @@ jobs:
           --collect-submodules loader
           --hidden-import win32com.client
           --hidden-import pythoncom
+          --hidden-import gdown
+          --collect-all gdown
 
       - name: Упаковать в ZIP
         shell: pwsh
@@ -97,3 +99,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ZIP }}
+
