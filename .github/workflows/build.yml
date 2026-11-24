@@ -1,3 +1,4 @@
+
 # Сборка links_loader.exe для Windows.
 #  • Публикация релиза на GitHub  → сборка + ZIP прикрепляется к релизу.
 #  • Вкладка Actions → «Run workflow» → пробная сборка (ZIP в «Artifacts»).
@@ -31,8 +32,8 @@ jobs:
           path: |
             build
             ~\AppData\Local\pyinstaller
+          # кэш берётся только при полностью совпадающем коде — старая сборка не подмешается
           key: pyinstaller-${{ runner.os }}-${{ hashFiles('requirements.txt', '**/*.py') }}
-          restore-keys: pyinstaller-${{ runner.os }}-
 
       - name: Установить библиотеки
         run: |
