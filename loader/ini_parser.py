@@ -145,6 +145,8 @@ def parse_links_docx(path):
 
 def parse_links_file(path):
     """links.ini (текст) или таблица ссылок в Word (.docx)."""
-    if str(path).lower().endswith('.docx'):
+    with open(path, 'rb') as f:
+        is_zip = f.read(4) == b'PK\x03\x04'      # .docx — это ZIP-архив
+    if str(path).lower().endswith('.docx') or is_zip:
         return parse_links_docx(path)
     return parse_links_ini(path)

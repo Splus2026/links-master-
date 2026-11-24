@@ -108,6 +108,7 @@ class App:
         ttk.Label(top, text='Файл ссылок:').pack(side='left')
         ttk.Entry(top, textvariable=self.ini_path).pack(side='left', fill='x', expand=True, padx=6)
         ttk.Button(top, text='Обзор…', command=self.browse_ini).pack(side='left')
+        ttk.Button(top, text='📄 Из Word…', command=self.browse_word).pack(side='left', padx=(6, 0))
         ttk.Button(top, text='Перечитать', command=self.load_ini).pack(side='left', padx=(6, 0))
 
         mid = ttk.Frame(self.root)
@@ -222,7 +223,7 @@ class App:
 
     def browse_ini(self):
         path = filedialog.askopenfilename(title='Файл ссылок', initialdir=str(APP_DIR),
-                                          filetypes=[('Список ссылок', '*.ini *.txt *.docx'), ('Word', '*.docx'), ('Все файлы', '*.*')])
+                                          filetypes=[('Список ссылок (ini, txt, Word)', '*.ini *.txt *.docx'), ('Документ Word', '*.docx'), ('Все файлы', '*.*')])
         if path:
             self.ini_path.set(path)
             self.load_ini()
@@ -265,6 +266,16 @@ class App:
                 if sec.name not in old:      # новые базы сразу отмечаем
                     var.set(True)
             self.status.config(text='Список ссылок обновлён.')
+
+    def browse_word(self):
+        path = filedialog.askopenfilename(title='Список ссылок в Word', initialdir=str(APP_DIR),
+                                          filetypes=[('Документ Word', '*.docx'), ('Все файлы', '*.*')])
+        if path:
+            self.ini_path.set(path)
+            self.load_ini()
+            self.set_all(True)
+            self.status.config(text=f'Загружено из Word: {len(self.sections)} баз, '
+                                    f'{sum(len(s.urls) for s in self.sections)} ссылок.')
 
     def load_ini(self):
         self.btn_links.config(text=f'📝  Ссылки для загрузки\n(открыть {Path(self.ini_path.get()).name})')
