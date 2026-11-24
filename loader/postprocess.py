@@ -87,7 +87,7 @@ def _mark_done(section_dir, name):
         f.write(name + '\n')
 
 
-def unpack_section(section_dir, stop_event=None, delete_after=False):
+def unpack_section(section_dir, stop_event=None, delete_after=False, progress=None):
     """Распаковывает все архивы раздела. Архив после успешной распаковки
     удаляется (delete_after=True) или переносится в _архивы.
     Возвращает список (имя_архива, успех, сообщение)."""
@@ -96,9 +96,11 @@ def unpack_section(section_dir, stop_event=None, delete_after=False):
         return results
     archives = sorted(p for p in section_dir.iterdir()
                       if p.is_file() and p.suffix.lower() in ARCHIVE_EXTS)
-    for arc in archives:
+    for i, arc in enumerate(archives, 1):
         if stop_event is not None and stop_event.is_set():
             raise Cancelled()
+        if progress:
+            progress(f'распаковка: архив {i} из {len(archives)} — {arc.name}')
         try:
             if arc.suffix.lower() == '.zip':
                 n = extract_zip(arc, section_dir)
@@ -188,7 +190,7 @@ def _unlink_retry(path, tries=10, pause=0.5):
     return False
 
 
-def convert_docs(dirs, stop_event=None):
+def convert_docs(dirs, stop_event=None, progress=None):
     """Преобразует все .doc в .docx (через Word, а если его нет — через LibreOffice).
     Исходный .doc после успешного преобразования удаляется.
     Возвращает список (имя_файла, успех, сообщение)."""
@@ -221,9 +223,11 @@ def convert_docs(dirs, stop_event=None):
             hint = 'не найден ни Microsoft Word, ни LibreOffice — DOC оставлены как есть'
         return results + [(f'{len(todo)} файл(ов) DOC', False, hint)]
     try:
-        for p in todo:
+        for i, p in enumerate(todo, 1):
             if stop_event is not None and stop_event.is_set():
                 raise Cancelled()
+            if progress:
+                progress(f'DOC → DOCX: файл {i} из {len(todo)} — {p.name}')
             out = p.with_suffix('.docx')
             try:
                 if word:

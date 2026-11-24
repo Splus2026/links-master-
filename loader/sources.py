@@ -8,6 +8,7 @@
                                      ищем на ней ссылку на файл
 """
 import base64
+from pathlib import Path
 import html as htmlmod
 import re
 import time
@@ -23,11 +24,19 @@ FORUM_PAGE_PAUSE = 2   # пауза между страницами форума
 
 
 class Context:
-    def __init__(self, session, stop_event, skip_existing, log):
+    """Всё, что нужно обработчикам ссылок. status/row/ask — связь с окном программы:
+    status(текст) — строка состояния, row(ссылка_или_файл, статус, пояснение) — строка
+    в таблице результатов, ask(вопрос) → True/False — вопрос пользователю."""
+
+    def __init__(self, session, stop_event, skip_existing, log,
+                 status=None, row=None, ask=None):
         self.session = session
         self.stop = stop_event
         self.skip_existing = skip_existing
         self.log = log
+        self.status = status or (lambda text: None)
+        self.row = row or (lambda name, status, msg: None)
+        self.ask = ask or (lambda question: True)
 
     def check_stop(self):
         if self.stop.is_set():
@@ -326,7 +335,12 @@ def handle_zapoved(ctx, section_dir, url):
 
 # ---------------------------------------------------------------- папка Google Диска
 
+GDRIVE_LIST_LIMIT = 50   # больше 50 файлов в одной папке Google без API-ключа не показывает
+
+
 def handle_gdrive_folder(ctx, section_dir, url):
+    """Папка Google Диска: сначала список файлов, затем загрузка по одному файлу.
+    Про каждую вложенную папку программа спрашивает, загружать ли её."""
     note = 'откройте папку и нажмите «Скачать всё»'
     try:
         import gdown
@@ -337,15 +351,73 @@ def handle_gdrive_folder(ctx, section_dir, url):
     except Exception as e:  # noqa: BLE001 — gdown есть, но не запустился
         return Result('fail', f'папка Google Диска: gdown не запустился ({e})',
                       manual=[(url, note)])
+
     section_dir.mkdir(parents=True, exist_ok=True)
+    ctx.status('Google Диск: получаю список файлов (это может занять минуту)…')
     try:
-        files = gdown.download_folder(url=url, output=str(section_dir), quiet=True,
-                                      remaining_ok=True)
-    except TypeError:   # в новых версиях gdown этого параметра нет
+        listing = gdown.download_folder(url=url, output=str(section_dir), quiet=True,
+                                        remaining_ok=True, skip_download=True)
+    except TypeError:   # старый gdown без skip_download — качаем папку целиком
         files = gdown.download_folder(url=url, output=str(section_dir), quiet=True)
-    if not files:
-        return Result('fail', 'Google Диск не отдал файлы', manual=[(url, note)])
-    return Result('ok', f'с Google Диска: {len(files)} файл(ов)')
+        if not files:
+            return Result('fail', 'Google Диск не отдал файлы', manual=[(url, note)])
+        return Result('ok', f'с Google Диска: {len(files)} файл(ов)')
+    if not listing:
+        return Result('fail', 'Google Диск не отдал список файлов', manual=[(url, note)])
+
+    # раскладываем по вложенным папкам первого уровня
+    groups = {}
+    for item in listing:
+        rel = Path(item.local_path).resolve().relative_to(section_dir.resolve())
+        top = rel.parts[0] if len(rel.parts) > 1 else ''
+        groups.setdefault(top, []).append(item)
+
+    chosen = list(groups.get('', []))
+    for folder in sorted(k for k in groups if k):
+        ctx.check_stop()
+        n = len(groups[folder])
+        if ctx.ask(f'На Google Диске есть папка:\n\n«{folder}»  ({n} файл(ов))\n\nЗагружать её?'):
+            chosen += groups[folder]
+            ctx.log(f'    Google Диск: папка «{folder}» — загружать ({n})')
+        else:
+            ctx.row(f'папка «{folder}»', 'skip', 'пропущена по выбору')
+            ctx.log(f'    Google Диск: папка «{folder}» — пропущена')
+
+    got, skipped, errors = 0, 0, []
+    for i, item in enumerate(chosen, 1):
+        ctx.check_stop()
+        target = Path(item.local_path)
+        name = str(Path(item.local_path).resolve().relative_to(section_dir.resolve()))
+        ctx.status(f'Google Диск: файл {i} из {len(chosen)} — {name}')
+        if ctx.skip_existing and target.exists() and target.stat().st_size > 0:
+            skipped += 1
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            out = gdown.download(id=item.id, output=str(target), quiet=True)
+        except Exception as e:  # noqa: BLE001
+            out, err = None, str(e)[:100]
+        else:
+            err = 'Google не отдал файл'
+        if out and target.exists():
+            got += 1
+            ctx.row(name, 'ok', 'Google Диск')
+        else:
+            errors.append((f'https://drive.google.com/file/d/{item.id}/view', f'{name}: {err}'))
+            ctx.row(name, 'fail', err)
+
+    full = [k or 'корень' for k, v in groups.items() if len(v) >= GDRIVE_LIST_LIMIT]
+    msg = f'с Google Диска: загружено {got}, уже было {skipped}'
+    manual = list(errors)
+    if errors:
+        msg += f', не удалось {len(errors)}'
+    if full:
+        msg += (f'; в папках {", ".join(full)} Google показал только первые '
+                f'{GDRIVE_LIST_LIMIT} файлов — остальные скачайте вручную')
+        manual.insert(0, (url, 'Google Диск показывает программе не больше 50 файлов в папке'))
+    if got == 0 and skipped == 0 and chosen:
+        return Result('fail', msg, manual=manual)
+    return Result('ok' if got else 'skip', msg, manual=manual)
 
 
 # ---------------------------------------------------------------- обычные ссылки

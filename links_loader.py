@@ -45,7 +45,7 @@ from loader.postprocess import convert_docs, unpack_section
 from loader.report import write_report
 from loader.sources import Context, process_url
 
-STATUS_TEXT = {'ok': '✔ загружено', 'skip': '• уже было', 'fail': '✖ не удалось',
+STATUS_TEXT = {'ok': '✔ загружено', 'skip': '• уже было', 'fail': '✖ не удалось', 'time': '⏱ время',
                'post_ok': '✔ готово', 'post_fail': '✖ ошибка'}
 
 
@@ -234,6 +234,8 @@ class App:
         self.tree.tag_configure('fail', foreground='#b2453a')
         self.tree.tag_configure('post_ok', foreground='#1f6f8a')
         self.tree.tag_configure('post_fail', foreground='#b2453a')
+        self.tree.tag_configure('time', foreground='#6a2c91', background='#f1e9f7',
+                                font=('Segoe UI', FONT_SIZE + 1, 'bold'))
         self.tree.bind('<Double-1>', self.on_row_double)
 
         # итог
@@ -477,9 +479,22 @@ class App:
 
         log.info('=' * 70)
         log.info(f'НАЧАЛО. Разделов: {len(selected)}, ссылок: {total}. Настройки: {opts}')
-        ctx = Context(make_session(), self.stop_event, opts['skip'], log.info)
+        current = {'section': '', 'done': 0}
+
+        def status(text):
+            put(('progress', current['done'], total, f"{current['section']}: {text}"))
+
+        def row(name, st, msg):
+            log.info(f'      [{st.upper():4}] {name}  —  {msg}')
+            put(('row', current['section'], name, st, msg))
+
+        ctx = Context(make_session(), self.stop_event, opts['skip'], log.info,
+                      status=status, row=row, ask=self.ask_from_worker)
+        t_all = time.time()
         try:
             for sec in selected:
+                t_sec = time.time()
+                current['section'] = sec.name
                 sdir = DOWNLOADS / (safe_name(sec.name) or 'Без названия')
                 sdir.mkdir(parents=True, exist_ok=True)
                 section_dirs.append(sdir)
@@ -489,6 +504,7 @@ class App:
                     put(('progress', done, total, f'{sec.name}: {url}'))
                     res = process_url(ctx, sdir, url)
                     done += 1
+                    current['done'] = done
                     stats[res.status] += 1
                     log.info(f'  [{res.status.upper():4}] {url}  —  {res.message}')
                     for link, note in res.manual:
@@ -503,15 +519,22 @@ class App:
 
                 if opts['unpack']:
                     put(('progress', done, total, f'{sec.name}: распаковка архивов…'))
-                    for name, ok, msg in unpack_section(sdir, self.stop_event, opts['delete']):
+                    for name, ok, msg in unpack_section(sdir, self.stop_event, opts['delete'], status):
                         log.info(f'  [{"UNZIP" if ok else "ERR  "}] {name}  —  {msg}')
                         put(('row', sec.name, f'распаковка: {name}', 'post_ok' if ok else 'post_fail', msg))
 
+                spent = self._fmt_time(time.time() - t_sec)
+                log.info(f'  ВРЕМЯ «{sec.name}»: {spent}')
+                put(('row', sec.name, f'⏱  {sec.name}', 'time', spent))
+
             if opts['convert']:
-                put(('progress', done, total, 'Преобразование DOC → DOCX…'))
-                for name, ok, msg in convert_docs(section_dirs, self.stop_event):
+                current['section'] = 'Все базы'
+                status('преобразование DOC → DOCX…')
+                t_conv = time.time()
+                for name, ok, msg in convert_docs(section_dirs, self.stop_event, status):
                     log.info(f'  [{"DOCX " if ok else "ERR  "}] {name}  —  {msg}')
                     put(('row', '', f'DOC → DOCX: {name}', 'post_ok' if ok else 'post_fail', msg))
+                put(('row', '', '⏱  DOC → DOCX', 'time', self._fmt_time(time.time() - t_conv)))
         except Cancelled:
             cancelled = True
             log.info('ОСТАНОВЛЕНО пользователем')
@@ -525,8 +548,20 @@ class App:
                 report = write_report(REPORT_FILE, failed, stats, DOWNLOADS, cancelled)
             except OSError as e:
                 log.info(f'Не удалось записать страницу ручной загрузки: {e}')
-        log.info(f'ИТОГ: загружено {stats["ok"]}, уже было {stats["skip"]}, не удалось {stats["fail"]}')
+        spent = self._fmt_time(time.time() - t_all)
+        log.info(f'ИТОГ: загружено {stats["ok"]}, уже было {stats["skip"]}, не удалось {stats["fail"]}. '
+                 f'Время: {spent}')
         put(('done', done, total, stats, report, cancelled))
+
+    def ask_from_worker(self, question):
+        """Задать вопрос «Да/Нет» из рабочего потока и дождаться ответа."""
+        answer = {}
+        ready = threading.Event()
+        self.q.put(('ask', question, answer, ready))
+        while not ready.wait(0.2):
+            if self.stop_event.is_set():
+                raise Cancelled()
+        return answer.get('yes', False)
 
     # ------------------------------------------------------------ обновление окна
 
@@ -546,6 +581,10 @@ class App:
                     if url.startswith('http'):
                         self.row_urls[iid] = url
                     self.tree.see(iid)
+                elif kind == 'ask':
+                    _, question, answer, ready = msg
+                    answer['yes'] = messagebox.askyesno('Подтверждение', question, parent=self.root)
+                    ready.set()
                 elif kind == 'done':
                     self.finish(*msg[1:])
         except queue.Empty:
@@ -563,8 +602,10 @@ class App:
         return f'{h}:{m:02}:{s:02}' if h else f'{m:02}:{s:02}'
 
     def finish(self, done, total, stats, report, cancelled):
+        spent = ''
         if self.t_start is not None:
-            self.timer_label.config(text=self._fmt_time(time.time() - self.t_start), fg='#1b7a3a')
+            spent = self._fmt_time(time.time() - self.t_start)
+            self.timer_label.config(text=spent, fg='#1b7a3a')
             self.t_start = None
         self.progress.config(maximum=max(total, 1), value=done)
         head = 'Остановлено. ' if cancelled else 'Готово. '
@@ -577,6 +618,15 @@ class App:
             self.link_report.pack(anchor='w', pady=(2, 0))
         self.btn_start.config(state='normal')
         self.btn_stop.config(state='disabled')
+        self.root.bell()
+        text = (f'Загружено: {stats["ok"]}\nУже было: {stats["skip"]}\n'
+                f'Не удалось: {stats["fail"]}\n\nВремя: {spent}')
+        if report:
+            text += '\n\nНе скачанное — на странице для ручной загрузки (ссылка внизу окна).'
+        if cancelled:
+            messagebox.showwarning('Загрузка остановлена', text, parent=self.root)
+        else:
+            messagebox.showinfo('Загрузка завершена ✔', text, parent=self.root)
 
     def on_row_double(self, event):
         iid = self.tree.identify_row(event.y)
