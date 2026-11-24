@@ -40,7 +40,7 @@ except ImportError:
 
 from loader.common import Cancelled, safe_name
 from loader.http_utils import make_session
-from loader.ini_parser import parse_links_ini
+from loader.ini_parser import parse_links_file
 from loader.postprocess import convert_docs, unpack_section
 from loader.report import write_report
 from loader.sources import Context, process_url
@@ -139,7 +139,7 @@ class App:
         # центр: большая кнопка «Ссылки для загрузки» и таймер
         center = ttk.Frame(mid)
         center.pack(side='left', fill='both', expand=True, padx=8)
-        self.btn_links = tk.Button(center, text='📝  Ссылки для загрузки\n(открыть links.ini)',
+        self.btn_links = tk.Button(center, text='📝  Ссылки для загрузки',
                                    font=('Segoe UI', FONT_SIZE + 6, 'bold'), bg='#1f8a8a', fg='white',
                                    activebackground='#176c6c', activeforeground='white',
                                    relief='flat', cursor='hand2', command=self.edit_ini)
@@ -222,13 +222,19 @@ class App:
 
     def browse_ini(self):
         path = filedialog.askopenfilename(title='Файл ссылок', initialdir=str(APP_DIR),
-                                          filetypes=[('Файл ссылок', '*.ini *.txt'), ('Все файлы', '*.*')])
+                                          filetypes=[('Список ссылок', '*.ini *.txt *.docx'), ('Word', '*.docx'), ('Все файлы', '*.*')])
         if path:
             self.ini_path.set(path)
             self.load_ini()
 
     def edit_ini(self):
         path = Path(self.ini_path.get() or (APP_DIR / 'links.ini'))
+        if path.suffix.lower() == '.docx':
+            if path.exists():
+                open_path(path)          # откроется в Word
+            else:
+                messagebox.showinfo('Нет файла', f'Файл не найден:\n{path}')
+            return
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('# Название базы — отдельной строкой, под ним ссылки (по одной в строке).\n'
@@ -261,6 +267,7 @@ class App:
             self.status.config(text='Список ссылок обновлён.')
 
     def load_ini(self):
+        self.btn_links.config(text=f'📝  Ссылки для загрузки\n(открыть {Path(self.ini_path.get()).name})')
         try:
             self.ini_mtime = Path(self.ini_path.get()).stat().st_mtime
         except OSError:
@@ -276,7 +283,7 @@ class App:
             self.count_label.config(text='')
             return
         try:
-            self.sections = parse_links_ini(path)
+            self.sections = parse_links_file(path)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror('Ошибка чтения', str(e))
             return
