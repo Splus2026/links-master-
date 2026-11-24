@@ -74,3 +74,35 @@ def write_report(path, failed, stats, downloads_dir, cancelled=False):
 </body></html>"""
     path.write_text(html, encoding='utf-8')
     return path
+
+
+def write_links_view(path, sections, source_name):
+    """Страница просмотра файла ссылок: все базы и их ссылки."""
+    total = sum(len(s.urls) for s in sections)
+    blocks = []
+    for sec in sections:
+        items = ''.join(f'<li><a href="{escape(u)}" target="_blank" rel="noopener">{escape(u)}</a></li>'
+                        for u in sec.urls)
+        blocks.append(f'<section><h2>{escape(sec.name)} <span class="cnt">{len(sec.urls)}</span></h2>'
+                      f'<ol>{items}</ol></section>')
+    html = f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<title>Файл ссылок — {escape(source_name)}</title>
+<style>
+ body {{ font:17px/1.55 "Segoe UI",Arial,sans-serif; color:#1d2b2b; background:#f7fafa;
+        max-width:1000px; margin:0 auto; padding:24px; }}
+ h1 {{ color:#1f8a8a; margin:0 0 4px; }}
+ .sum {{ color:#6a7b7b; }}
+ section {{ background:#fff; border:1px solid #d6e6e5; border-radius:8px; padding:4px 20px 10px; margin:16px 0; }}
+ h2 {{ font-size:20px; color:#1f8a8a; }}
+ .cnt {{ background:#1f8a8a; color:#fff; border-radius:10px; padding:0 8px; font-size:14px; vertical-align:middle; }}
+ ol {{ margin:0; padding-left:28px; }}
+ li {{ margin:3px 0; word-break:break-all; }}
+ a {{ color:#14607a; }}
+</style></head><body>
+<h1>Файл ссылок</h1>
+<div class="sum">{escape(source_name)} · баз: {len(sections)} · ссылок: {total}</div>
+{''.join(blocks)}
+</body></html>"""
+    path.write_text(html, encoding='utf-8')
+    return path

@@ -25,7 +25,7 @@ SETTINGS = APP_DIR / 'links_loader_settings.json'
 LOG_FILE = DOWNLOADS / 'загрузка.log'
 REPORT_FILE = DOWNLOADS / 'ручная_загрузка.html'
 PAUSE_BETWEEN_LINKS = 1.0   # секунды, чтобы не перегружать сайты
-FONT_SIZE = 12              # основной размер шрифта окна (было 9)
+FONT_SIZE = 14              # основной размер шрифта окна
 
 try:
     import requests  # noqa: F401
@@ -40,9 +40,9 @@ except ImportError:
 
 from loader.common import Cancelled, safe_name
 from loader.http_utils import make_session
-from loader.ini_parser import parse_links_file
+from loader.ini_parser import Section, parse_links_file
 from loader.postprocess import convert_docs, unpack_section
-from loader.report import write_report
+from loader.report import write_links_view, write_report
 from loader.sources import Context, process_url
 
 STATUS_TEXT = {'ok': '✔ загружено', 'skip': '• уже было', 'fail': '✖ не удалось',
@@ -90,6 +90,8 @@ class App:
         self.root = root
         self.sections = []
         self.section_vars = []
+        self.link_vars = []          # для каждой базы — галочки её ссылок
+        self._sync = False           # защита от «эха» при связке галочек
         self.q = queue.Queue()
         self.stop_event = threading.Event()
         self.worker = None
@@ -105,10 +107,11 @@ class App:
         self.ini_mtime = None
         self._last_watch = 0
         self._saved_checked = set(settings.get('checked', []))
+        self._saved_unchecked_links = set(settings.get('unchecked_links', []))
 
         root.title('Загрузчик файлов по списку ссылок')
-        root.geometry('1300x880')
-        root.minsize(1050, 700)
+        root.geometry('1450x940')
+        root.minsize(1200, 760)
         self._build_ui()
         self.load_ini()
         root.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -126,7 +129,7 @@ class App:
         lst.pack(side='left', fill='y')
         holder = ttk.Frame(lst)
         holder.pack(fill='both', expand=True, padx=4, pady=4)
-        self.canvas = tk.Canvas(holder, height=300, width=430, highlightthickness=0)
+        self.canvas = tk.Canvas(holder, height=330, width=500, highlightthickness=0)
         sb = ttk.Scrollbar(holder, orient='vertical', command=self.canvas.yview)
         self.check_frame = ttk.Frame(self.canvas)
         self.check_frame.bind('<Configure>',
@@ -143,7 +146,7 @@ class App:
         self.count_label = ttk.Label(lst, text='')
         self.count_label.pack(anchor='w', padx=6, pady=(0, 4))
 
-        # центр: большая кнопка «Ссылки для загрузки» и таймер
+        # центр: файл ссылок, «Редактор файла ссылок», «Просмотр» и таймер
         center = ttk.Frame(mid)
         center.pack(side='left', fill='both', expand=True, padx=8)
         ttk.Label(center, text='Файл ссылок:').pack(anchor='w', pady=(6, 0))
@@ -151,15 +154,15 @@ class App:
         filerow.pack(fill='x')
         ttk.Entry(filerow, textvariable=self.ini_path, state='readonly').pack(
             side='left', fill='x', expand=True, ipady=3)
-        color_button(filerow, '📂  Открыть файл ссылок…', self.browse_ini, '#1f6f8a').pack(
+        color_button(filerow, '📂  Выбрать файл ссылок…', self.browse_ini, '#1f6f8a').pack(
             side='left', padx=(6, 0))
-        self.btn_links = tk.Button(center, text='📝  Ссылки для загрузки',
+        self.btn_links = tk.Button(center, text='📝  Редактор файла ссылок',
                                    font=('Segoe UI', FONT_SIZE + 6, 'bold'), bg='#1f8a8a', fg='white',
                                    activebackground='#176c6c', activeforeground='white',
                                    relief='flat', cursor='hand2', command=self.edit_ini)
         self.btn_links.pack(fill='x', pady=(10, 4), ipady=14)
-        ttk.Label(center, text='Вставьте ссылки, сохраните файл (Ctrl+S) — список слева обновится сам.',
-                  foreground='#5a6b6b', wraplength=380, justify='center').pack()
+        color_button(center, '👁  Просмотр файла ссылок', self.view_links, '#5b7f95').pack(
+            fill='x', pady=(2, 0), ipady=3)
         self.timer_label = tk.Label(center, text='00:00', font=('Consolas', 56, 'bold'), fg='#1f6f8a')
         self.timer_label.pack(pady=(14, 0))
         ttk.Label(center, text='время загрузки', foreground='#5a6b6b').pack()
@@ -238,7 +241,7 @@ class App:
     # ------------------------------------------------------------ разделы
 
     def browse_ini(self):
-        path = filedialog.askopenfilename(title='Открыть файл ссылок', initialdir=str(APP_DIR),
+        path = filedialog.askopenfilename(title='Выбрать файл ссылок', initialdir=str(APP_DIR),
                                           filetypes=[('Список ссылок (ini, txt, Word)', '*.ini *.txt *.docx'), ('Документ Word', '*.docx'), ('Все файлы', '*.*')])
         if path:
             self.ini_path.set(path)
@@ -284,16 +287,15 @@ class App:
             self.status.config(text='Список ссылок обновлён.')
 
     def load_ini(self):
-        self.btn_links.config(text=f'📝  Ссылки для загрузки\n(открыть {Path(self.ini_path.get()).name})')
         try:
             self.ini_mtime = Path(self.ini_path.get()).stat().st_mtime
         except OSError:
             self.ini_mtime = None
         if self.sections:   # при обновлении списка сохраняем текущие галочки
-            self._saved_checked = {s.name for s, v in zip(self.sections, self.section_vars) if v.get()}
+            self._remember_checks()
         for w in self.check_frame.winfo_children():
             w.destroy()
-        self.sections, self.section_vars = [], []
+        self.sections, self.section_vars, self.link_vars = [], [], []
         path = Path(self.ini_path.get())
         if not path.exists():
             self.status.config(text=f'Файл не найден: {path}')
@@ -304,28 +306,81 @@ class App:
         except Exception as e:  # noqa: BLE001
             messagebox.showerror('Ошибка чтения', str(e))
             return
-        for sec in self.sections:
-            var = tk.BooleanVar(value=sec.name in self._saved_checked)
-            var.trace_add('write', lambda *a: self._update_count())
-            n = len(sec.urls)
-            ttk.Checkbutton(self.check_frame, text=f'{sec.name}   ({n})',
-                            variable=var).pack(anchor='w', padx=4, pady=(6, 0))
+        link_font = ('Segoe UI', FONT_SIZE - 2)
+        for i, sec in enumerate(self.sections):
+            on = sec.name in self._saved_checked
+            var = tk.BooleanVar(value=on)
+            ttk.Checkbutton(self.check_frame, text=f'{sec.name}   ({len(sec.urls)})',
+                            variable=var, style='Base.TCheckbutton').pack(anchor='w', padx=4, pady=(8, 0))
+            lvars = []
             for url in sec.urls:
-                lbl = tk.Label(self.check_frame, text=short_url(url), fg='#5a7a8a', cursor='hand2',
-                               font=('Segoe UI', max(FONT_SIZE - 3, 8)))
-                lbl.pack(anchor='w', padx=(30, 4))
-                lbl.bind('<Button-1>', lambda e, u=url: webbrowser.open(u))
+                lv = tk.BooleanVar(value=on and url not in self._saved_unchecked_links)
+                row = tk.Frame(self.check_frame)
+                row.pack(anchor='w', padx=(30, 4))
+                tk.Checkbutton(row, text=short_url(url), variable=lv, font=link_font,
+                               fg='#3f6070', anchor='w').pack(side='left')
+                go = tk.Label(row, text='↗', fg='#1f6f8a', cursor='hand2', font=link_font)
+                go.pack(side='left', padx=(4, 0))
+                go.bind('<Button-1>', lambda e, u=url: webbrowser.open(u))
+                lv.trace_add('write', lambda *a, k=i: self._link_changed(k))
+                lvars.append(lv)
+            var.trace_add('write', lambda *a, k=i: self._section_changed(k))
             self.section_vars.append(var)
+            self.link_vars.append(lvars)
         self._update_count()
 
+    def _section_changed(self, k):
+        """Галочка базы ставит или снимает галочки всех её ссылок."""
+        if not self._sync:
+            self._sync = True
+            value = self.section_vars[k].get()
+            for lv in self.link_vars[k]:
+                lv.set(value)
+            self._sync = False
+        self._update_count()
+
+    def _link_changed(self, k):
+        """Если отмечена хоть одна ссылка — отмечена и база."""
+        if not self._sync:
+            self._sync = True
+            self.section_vars[k].set(any(lv.get() for lv in self.link_vars[k]))
+            self._sync = False
+        self._update_count()
+
+    def _remember_checks(self):
+        self._saved_checked = {s.name for s, v in zip(self.sections, self.section_vars) if v.get()}
+        self._saved_unchecked_links = {u for s, lvs in zip(self.sections, self.link_vars)
+                                       for u, lv in zip(s.urls, lvs) if not lv.get()}
+
+    def selected_sections(self):
+        """Базы только с отмеченными ссылками."""
+        result = []
+        for sec, lvs in zip(self.sections, self.link_vars):
+            urls = [u for u, lv in zip(sec.urls, lvs) if lv.get()]
+            if urls:
+                part = Section(sec.name)
+                part.urls = urls
+                result.append(part)
+        return result
+
     def _update_count(self):
-        sel = [s for s, v in zip(self.sections, self.section_vars) if v.get()]
+        sel = self.selected_sections()
         links = sum(len(s.urls) for s in sel)
-        self.count_label.config(text=f'выбрано: {len(sel)} из {len(self.sections)}, ссылок: {links}')
+        self.count_label.config(text=f'выбрано баз: {len(sel)} из {len(self.sections)}, ссылок: {links}')
 
     def set_all(self, value):
         for v in self.section_vars:
             v.set(value)
+
+    def view_links(self):
+        """Просмотр всех баз и ссылок файла в браузере (ссылки кликабельны)."""
+        if not self.sections:
+            messagebox.showinfo('Нет ссылок', 'Сначала выберите файл ссылок.')
+            return
+        DOWNLOADS.mkdir(parents=True, exist_ok=True)
+        page = write_links_view(DOWNLOADS / 'просмотр_ссылок.html', self.sections,
+                                Path(self.ini_path.get()).name)
+        webbrowser.open(page.as_uri())
 
     def open_folder(self):
         DOWNLOADS.mkdir(parents=True, exist_ok=True)
@@ -343,7 +398,9 @@ class App:
         data = {'ini': self.ini_path.get(), 'unpack': self.opt_unpack.get(),
                 'convert': self.opt_convert.get(), 'skip': self.opt_skip.get(),
                 'delete_archives': self.opt_delete.get(),
-                'checked': [s.name for s, v in zip(self.sections, self.section_vars) if v.get()]}
+                'checked': [s.name for s, v in zip(self.sections, self.section_vars) if v.get()],
+                'unchecked_links': sorted({u for s, lvs in zip(self.sections, self.link_vars)
+                                           for u, lv in zip(s.urls, lvs) if not lv.get()})}
         try:
             SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
         except OSError:
@@ -352,9 +409,9 @@ class App:
     # ------------------------------------------------------------ запуск
 
     def start(self):
-        selected = [s for s, v in zip(self.sections, self.section_vars) if v.get()]
+        selected = self.selected_sections()
         if not selected:
-            messagebox.showinfo('Нечего загружать', 'Отметьте галочками хотя бы одну базу.')
+            messagebox.showinfo('Нечего загружать', 'Отметьте галочками хотя бы одну базу или ссылку.')
             return
         self._save_settings()
         self.tree.delete(*self.tree.get_children())
@@ -524,6 +581,7 @@ def main():
     style.configure('Treeview.Heading', font=('Segoe UI', FONT_SIZE, 'bold'))
     style.configure('TLabelframe.Label', font=('Segoe UI', FONT_SIZE, 'bold'))
     style.configure('TButton', padding=(10, 5))
+    style.configure('Base.TCheckbutton', font=('Segoe UI', FONT_SIZE, 'bold'))
     App(root)
     root.mainloop()
 
