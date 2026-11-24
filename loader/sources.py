@@ -334,6 +334,9 @@ def handle_gdrive_folder(ctx, section_dir, url):
         return Result('fail', 'папка Google Диска: скачайте вручную '
                               '(или установите gdown: pip install gdown)',
                       manual=[(url, note)])
+    except Exception as e:  # noqa: BLE001 — gdown есть, но не запустился
+        return Result('fail', f'папка Google Диска: gdown не запустился ({e})',
+                      manual=[(url, note)])
     section_dir.mkdir(parents=True, exist_ok=True)
     try:
         files = gdown.download_folder(url=url, output=str(section_dir), quiet=True,

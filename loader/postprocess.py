@@ -174,6 +174,20 @@ def _word_save_docx(word, doc, out):
     raise RuntimeError(f'Word не смог сохранить DOCX ({last})')
 
 
+def _unlink_retry(path, tries=10, pause=0.5):
+    """Word отпускает файл не сразу после закрытия — пробуем удалить несколько раз."""
+    import time
+    for _ in range(tries):
+        try:
+            path.unlink()
+            return True
+        except PermissionError:
+            time.sleep(pause)
+        except FileNotFoundError:
+            return True
+    return False
+
+
 def convert_docs(dirs, stop_event=None):
     """Преобразует все .doc в .docx (через Word, а если его нет — через LibreOffice).
     Исходный .doc после успешного преобразования удаляется.
@@ -190,8 +204,8 @@ def convert_docs(dirs, stop_event=None):
     todo = []
     for p in docs:
         if p.with_suffix('.docx').exists():
-            p.unlink()
-            results.append((p.name, True, 'DOCX уже был, DOC удалён'))
+            ok = _unlink_retry(p, tries=3)
+            results.append((p.name, ok, 'DOCX уже был, DOC удалён' if ok else 'DOC занят другой программой'))
         else:
             todo.append(p)
     if not todo:
@@ -223,8 +237,11 @@ def convert_docs(dirs, stop_event=None):
                                     '--outdir', str(p.parent), str(p)],
                                    capture_output=True, timeout=300, creationflags=_NO_WINDOW)
                 if out.exists() and out.stat().st_size > 0:
-                    p.unlink()
-                    results.append((p.name, True, f'→ {out.name}'))
+                    if _unlink_retry(p):
+                        results.append((p.name, True, f'→ {out.name}'))
+                    else:
+                        results.append((p.name, True, f'→ {out.name} (исходный DOC ещё занят Word, '
+                                                      f'удалится при следующем запуске)'))
                 else:
                     results.append((p.name, False, 'не удалось преобразовать'))
             except Cancelled:
