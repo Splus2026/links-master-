@@ -25,6 +25,7 @@ SETTINGS = APP_DIR / 'links_loader_settings.json'
 LOG_FILE = DOWNLOADS / 'загрузка.log'
 REPORT_FILE = DOWNLOADS / 'ручная_загрузка.html'
 PAUSE_BETWEEN_LINKS = 1.0   # секунды, чтобы не перегружать сайты
+BLINK_AFTER = 10            # сколько секунд итоговые строки мигают после окончания загрузки
 FONT_SIZE = 14              # основной размер шрифта окна
 
 try:
@@ -44,6 +45,12 @@ from loader.ini_parser import Section, parse_links_file
 from loader.postprocess import convert_docs, unpack_section
 from loader.report import write_report
 from loader.sources import Context, process_url
+
+try:   # файл loader/_build.py создаётся при сборке exe на GitHub
+    from loader._build import BUILD, DATE
+    BUILD_INFO = f'сборка {BUILD} от {DATE}'
+except ImportError:
+    BUILD_INFO = 'версия из исходников'
 
 STATUS_TEXT = {'ok': '✔ загружено', 'skip': '• уже было', 'fail': '✖ не удалось', 'time': '',
                'post_ok': '✔ готово', 'post_fail': '✖ ошибка'}
@@ -118,6 +125,9 @@ class App:
         self.stop_event = threading.Event()
         self.worker = None
         self.row_urls = {}
+        self.time_rows = []          # итоговые строки времени (мигают вместе)
+        self.blink_phase = False
+        self.blink_until = 0
 
         settings = self._load_settings()
         self.ini_path = tk.StringVar(value=settings.get('ini', str(APP_DIR / 'links.ini')))
@@ -131,7 +141,7 @@ class App:
         self._saved_checked = set(settings.get('checked', []))
         self._saved_unchecked_links = set(settings.get('unchecked_links', []))
 
-        root.title('Загрузчик файлов по списку ссылок')
+        root.title(f'Загрузчик файлов по списку ссылок — {BUILD_INFO}')
         root.geometry('1450x940')
         root.minsize(1200, 760)
         self.box_big = make_check_images(FONT_SIZE + 10)
@@ -140,6 +150,7 @@ class App:
         self.load_ini()
         root.protocol('WM_DELETE_WINDOW', self.on_close)
         root.after(100, self.poll)
+        root.after(450, self._blink_tick)
 
     # ------------------------------------------------------------ интерфейс
 
@@ -454,6 +465,7 @@ class App:
         self._save_settings()
         self.tree.delete(*self.tree.get_children())
         self.row_urls.clear()
+        self.time_rows.clear()
         self.link_folder.pack_forget()
         self.link_report.pack_forget()
         self.summary_label.config(text='')
@@ -601,7 +613,7 @@ class App:
                         self.row_urls[iid] = url
                     self.tree.see(iid)
                     if status == 'time':
-                        self._blink(iid, 12)
+                        self.time_rows.append(iid)
                 elif kind == 'ask':
                     _, question, answer, ready = msg
                     answer['yes'] = messagebox.askyesno('Подтверждение', question, parent=self.root)
@@ -623,6 +635,7 @@ class App:
         return f'{h}:{m:02}:{s:02}' if h else f'{m:02}:{s:02}'
 
     def finish(self, done, total, stats, report, cancelled):
+        self.blink_until = time.time() + BLINK_AFTER
         spent = ''
         if self.t_start is not None:
             spent = self._fmt_time(time.time() - self.t_start)
@@ -672,14 +685,17 @@ class App:
         win.grab_set()
         win.focus_set()
 
-    def _blink(self, iid, times):
-        """Итоговая строка времени мигает несколько секунд, затем остаётся выделенной."""
-        if not self.tree.exists(iid):
-            return
-        tag = 'time_blink' if times % 2 else 'time'
-        self.tree.item(iid, tags=(tag,))
-        if times > 0:
-            self.root.after(400, self._blink, iid, times - 1)
+    def _blink_tick(self):
+        """Все итоговые строки времени мигают одновременно — во время загрузки
+        и ещё BLINK_AFTER секунд после её окончания, затем остаются выделенными."""
+        running = self.worker is not None and self.worker.is_alive()
+        active = running or time.time() < self.blink_until
+        self.blink_phase = not self.blink_phase if active else False
+        tag = 'time_blink' if self.blink_phase else 'time'
+        self.time_rows = [i for i in self.time_rows if self.tree.exists(i)]
+        for iid in self.time_rows:
+            self.tree.item(iid, tags=(tag,))
+        self.root.after(450, self._blink_tick)
 
     def on_row_double(self, event):
         iid = self.tree.identify_row(event.y)
