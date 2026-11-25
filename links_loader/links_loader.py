@@ -122,7 +122,7 @@ class App:
         settings = self._load_settings()
         self.ini_path = tk.StringVar(value=settings.get('ini', str(APP_DIR / 'links.ini')))
         self.opt_unpack = tk.BooleanVar(value=settings.get('unpack', True))
-        self.opt_convert = tk.BooleanVar(value=settings.get('convert', False))
+        self.opt_convert = tk.BooleanVar(value=settings.get('convert', True))
         self.opt_skip = tk.BooleanVar(value=settings.get('skip', True))
         self.opt_delete = tk.BooleanVar(value=settings.get('delete_archives', False))
         self.t_start = None
@@ -188,6 +188,10 @@ class App:
         self.timer_label = tk.Label(center, text='00:00', font=('Consolas', 56, 'bold'), fg='#1f6f8a')
         self.timer_label.pack(pady=(14, 0))
         ttk.Label(center, text='время загрузки', foreground='#5a6b6b').pack()
+        tk.Label(center, text='Автоматические загрузки с некоторых сайтов могут блокироваться '
+                              'настройками антивирусов',
+                 font=('Segoe UI', FONT_SIZE), fg='#b2453a', wraplength=520,
+                 justify='center').pack(pady=(16, 0))
 
         # настройки и кнопки
         opt = ttk.LabelFrame(mid, text='Настройки')
