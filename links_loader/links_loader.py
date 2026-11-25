@@ -205,6 +205,8 @@ class App:
         self.btn_stop.pack(fill='x', padx=8, pady=2)
         color_button(opt, '📁  Открыть папку downloads', lambda: self.open_folder(),
                      '#2e8b57').pack(fill='x', padx=8, pady=(10, 2))
+        self.btn_manual = color_button(opt, '🌐  Не скачанное (вручную)', self.open_report, '#d68910')
+        self.btn_manual.pack(fill='x', padx=8, pady=2)
         color_button(opt, '📄  Открыть лог', lambda: LOG_FILE.exists() and open_path(LOG_FILE),
                      '#6c7a89').pack(fill='x', padx=8, pady=2)
 
@@ -240,7 +242,7 @@ class App:
 
         # итог
         self.summary = ttk.Frame(self.root)
-        self.summary.pack(fill='x', padx=8, pady=(0, 8))
+        self.summary.pack(side='bottom', fill='x', padx=8, pady=(0, 8), before=res)
         self.summary_label = ttk.Label(self.summary, text='', font=('Segoe UI', FONT_SIZE + 2, 'bold'))
         self.summary_label.pack(anchor='w')
         self.link_folder = self._make_link(self.summary, '📁  Папка с загруженными базами',
@@ -259,6 +261,13 @@ class App:
         bg = cb.cget('bg')
         cb.config(selectcolor=bg, activebackground=bg)
         return cb
+
+    def open_report(self):
+        if REPORT_FILE.exists():
+            webbrowser.open(REPORT_FILE.as_uri())
+        else:
+            messagebox.showinfo('Ручная загрузка', 'Страницы пока нет: всё скачалось '
+                                'или загрузка ещё не запускалась.', parent=self.root)
 
     def _make_link(self, parent, text, callback):
         lbl = tk.Label(parent, text=text, fg='#14607a', cursor='hand2',
@@ -442,6 +451,10 @@ class App:
         self.link_folder.pack_forget()
         self.link_report.pack_forget()
         self.summary_label.config(text='')
+        try:                         # старая страница «не скачанного» относится к прошлому запуску
+            REPORT_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
         self.stop_event.clear()
         self.btn_start.config(state='disabled')
         self.btn_stop.config(state='normal')
@@ -619,14 +632,37 @@ class App:
         self.btn_start.config(state='normal')
         self.btn_stop.config(state='disabled')
         self.root.bell()
+        self.show_done_dialog(stats, spent, report, cancelled)
+
+    def show_done_dialog(self, stats, spent, report, cancelled):
+        """Окно «Загрузка завершена» с кнопками «Не скачанное», «Папка», «OK»."""
+        win = tk.Toplevel(self.root)
+        win.title('Загрузка остановлена' if cancelled else 'Загрузка завершена')
+        win.transient(self.root)
+        win.resizable(False, False)
+        head = '■  Загрузка остановлена' if cancelled else '✔  Загрузка завершена'
+        tk.Label(win, text=head, font=('Segoe UI', FONT_SIZE + 4, 'bold'),
+                 fg='#c0392b' if cancelled else '#2e8b57').pack(padx=30, pady=(18, 8))
         text = (f'Загружено: {stats["ok"]}\nУже было: {stats["skip"]}\n'
                 f'Не удалось: {stats["fail"]}\n\nВремя: {spent}')
+        tk.Label(win, text=text, font=('Segoe UI', FONT_SIZE), justify='left').pack(padx=30)
+        btns = tk.Frame(win)
+        btns.pack(padx=20, pady=18)
         if report:
-            text += '\n\nНе скачанное — на странице для ручной загрузки (ссылка внизу окна).'
-        if cancelled:
-            messagebox.showwarning('Загрузка остановлена', text, parent=self.root)
-        else:
-            messagebox.showinfo('Загрузка завершена ✔', text, parent=self.root)
+            tk.Label(win, text='Не скачанное можно открыть списком ссылок в браузере:',
+                     font=('Segoe UI', FONT_SIZE - 1), fg='#6a5a40').pack(before=btns, padx=30, pady=(12, 0))
+            color_button(btns, '🌐  Открыть не скачанное', lambda: (self.open_report(), win.destroy()),
+                         '#d68910', bold=True).pack(side='left', padx=4)
+        color_button(btns, '📁  Папка downloads', lambda: (self.open_folder(), win.destroy()),
+                     '#2e8b57').pack(side='left', padx=4)
+        color_button(btns, 'OK', win.destroy, '#5b7f95').pack(side='left', padx=4)
+        win.bind('<Escape>', lambda e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f'+{max(x, 0)}+{max(y, 0)}')
+        win.grab_set()
+        win.focus_set()
 
     def on_row_double(self, event):
         iid = self.tree.identify_row(event.y)
