@@ -45,7 +45,13 @@ from loader.postprocess import convert_docs, unpack_section
 from loader.report import write_report
 from loader.sources import Context, process_url
 
-STATUS_TEXT = {'ok': '✔ загружено', 'skip': '• уже было', 'fail': '✖ не удалось', 'time': '⏱ время',
+try:   # файл loader/_build.py создаётся при сборке exe на GitHub
+    from loader._build import BUILD, DATE
+    BUILD_INFO = f'сборка {BUILD} от {DATE}'
+except ImportError:
+    BUILD_INFO = 'версия из исходников'
+
+STATUS_TEXT = {'ok': '✔ загружено', 'skip': '• уже было', 'fail': '✖ не удалось', 'time': '',
                'post_ok': '✔ готово', 'post_fail': '✖ ошибка'}
 
 
@@ -131,7 +137,7 @@ class App:
         self._saved_checked = set(settings.get('checked', []))
         self._saved_unchecked_links = set(settings.get('unchecked_links', []))
 
-        root.title('Загрузчик файлов по списку ссылок')
+        root.title(f'Загрузчик файлов по списку ссылок — {BUILD_INFO}')
         root.geometry('1450x940')
         root.minsize(1200, 760)
         self.box_big = make_check_images(FONT_SIZE + 10)
@@ -241,6 +247,8 @@ class App:
         self.tree.tag_configure('post_ok', foreground='#1f6f8a')
         self.tree.tag_configure('post_fail', foreground='#b2453a')
         self.tree.tag_configure('time', foreground='#6a2c91', background='#f1e9f7',
+                                font=('Segoe UI', FONT_SIZE + 1, 'bold'))
+        self.tree.tag_configure('time_blink', foreground='white', background='#8e44ad',
                                 font=('Segoe UI', FONT_SIZE + 1, 'bold'))
         self.tree.bind('<Double-1>', self.on_row_double)
 
@@ -598,6 +606,8 @@ class App:
                     if url.startswith('http'):
                         self.row_urls[iid] = url
                     self.tree.see(iid)
+                    if status == 'time':
+                        self._blink(iid, 12)
                 elif kind == 'ask':
                     _, question, answer, ready = msg
                     answer['yes'] = messagebox.askyesno('Подтверждение', question, parent=self.root)
@@ -667,6 +677,15 @@ class App:
         win.geometry(f'+{max(x, 0)}+{max(y, 0)}')
         win.grab_set()
         win.focus_set()
+
+    def _blink(self, iid, times):
+        """Итоговая строка времени мигает несколько секунд, затем остаётся выделенной."""
+        if not self.tree.exists(iid):
+            return
+        tag = 'time_blink' if times % 2 else 'time'
+        self.tree.item(iid, tags=(tag,))
+        if times > 0:
+            self.root.after(400, self._blink, iid, times - 1)
 
     def on_row_double(self, event):
         iid = self.tree.identify_row(event.y)
