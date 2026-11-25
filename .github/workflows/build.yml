@@ -50,6 +50,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Записать номер сборки
+        shell: pwsh
+        run: |
+          $sha = "${{ github.sha }}".Substring(0, 7)
+          $date = (Get-Date).ToUniversalTime().AddHours(2).ToString("dd.MM.yyyy HH:mm")
+          "BUILD = '${{ github.run_number }}'`nCOMMIT = '$sha'`nDATE = '$date'" |
+            Set-Content -Path loader\_build.py -Encoding utf8
+
       - name: Собрать exe
         run: >
           pyinstaller links_loader.py
@@ -99,5 +107,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ZIP }}
-
-
